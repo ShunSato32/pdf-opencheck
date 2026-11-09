@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="PowerShellベースの既存Office文書検査にPDFの破損・暗号化・セキュリティ警告検知を追加するための実現方式比較と推奨構成。">
+  <title>PDF開封可否・セキュリティ警告検知｜実現方式検討レポート</title>
+  <style>
+    :root {
+      --ink: #17243d; --muted: #5d6b7e; --soft: #f4f7fb; --paper: #ffffff;
+      --line: #dce4ef; --navy: #11274d; --blue: #2358b8; --blue-light: #eaf1ff;
+      --teal: #0f766e; --teal-light: #e5f7f2; --orange: #a75c0e; --orange-light: #fff5e6;
+      --red: #b42334; --red-light: #fff0f2; --shadow: 0 12px 42px rgba(27, 48, 86, .07);
+      font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", "Meiryo", "Noto Sans JP", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: #eef2f8; color: var(--ink); line-height: 1.85; font-size: 15px; }
+    a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+    .toolbar { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--line); backdrop-filter: blur(12px); }
+    .toolbar-inner { max-width: 1120px; margin: 0 auto; padding: 11px 25px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .toolbar-title { font-weight: 800; font-size: 13px; color: var(--navy); letter-spacing: .035em; }
+    .btn { cursor: pointer; border: 1px solid #bed0ee; background: white; color: var(--blue); font: inherit; font-size: 12px; padding: 7px 13px; border-radius: 8px; font-weight: 700; white-space: nowrap; }
+    .btn.primary { background: var(--blue); color: white; border-color: var(--blue); }
+    .btn:hover { filter: brightness(.97); }
+    .page { max-width: 1120px; margin: 30px auto 56px; background: var(--paper); box-shadow: var(--shadow); border-radius: 16px; overflow: hidden; }
+    .hero { background: linear-gradient(124deg,#102449 0%,#193e7b 72%,#215d9d 100%); color: #fff; padding: 58px 64px 56px; }
+    .eyebrow { display: inline-block; font-size: 12px; font-weight: 800; color: #acd0ff; letter-spacing: .15em; margin-bottom: 14px; }
+    h1 { font-size: clamp(26px, 3.5vw, 37px); margin: 0 0 16px; line-height: 1.42; letter-spacing: .02em; }
+    .hero p { color: #dbe7ff; max-width: 770px; line-height: 1.9; margin: 0; }
+    .meta { display:flex; gap: 24px; flex-wrap: wrap; margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,.22); font-size: 12px; color: #d0dcf2; }
+    .main { padding: 48px 64px 64px; }
+    .lead { font-size: 16px; line-height: 2; }
+    h2 { font-size: 23px; line-height: 1.5; color: var(--navy); border-bottom: 2px solid var(--line); padding-bottom: 12px; margin: 54px 0 20px; }
+    h2:first-child { margin-top: 0; }
+    h3 { font-size: 18px; color: var(--navy); margin: 31px 0 12px; }
+    h4 { margin: 24px 0 8px; font-size: 15px; }
+    p { margin: 10px 0 15px; }
+    ul, ol { margin: 12px 0 20px; padding-left: 26px; }
+    li { margin: 6px 0; }
+    .summary { background: var(--blue-light); border-left: 5px solid var(--blue); border-radius: 0 12px 12px 0; padding: 22px 26px; margin: 24px 0; }
+    .summary .summary-title { font-weight: 800; color: #123e83; font-size: 16px; margin-bottom: 8px; }
+    .summary p { margin: 0; }
+    .note { background: #f6f8fb; border: 1px solid var(--line); border-radius: 10px; padding: 16px 19px; margin: 16px 0; }
+    .note.warning { background: var(--orange-light); border-color: #f4d5a7; }
+    .note.danger { background: var(--red-light); border-color: #f3c7ce; }
+    .note strong { color: var(--navy); }
+    .section-tag { font-size: 12px; letter-spacing: .06em; color: var(--blue); font-weight: 800; margin-bottom: 2px; }
+    .table-wrap { width: 100%; overflow-x: auto; margin: 19px 0 26px; border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; min-width: 650px; line-height: 1.65; font-size: 13px; }
+    th,td { padding: 13px 15px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    thead th { background: #eaf0f8; color: #1a3764; font-size: 13px; font-weight: 800; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:nth-child(even) { background: #fbfcfe; }
+    td:first-child { font-weight: 650; }
+    .emphasis-row td { background: #eef7f7 !important; }
+    .chip { display:inline-block; border-radius: 30px; padding: 2px 9px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .chip.ok { background: var(--teal-light); color: var(--teal); }
+    .chip.warn { background: var(--orange-light); color: var(--orange); }
+    .chip.bad { background: var(--red-light); color: var(--red); }
+    .chip.na { background: #edf0f5; color: #667286; }
+    .flow { padding: 25px; background: #f7f9fd; border: 1px solid var(--line); border-radius: 14px; margin: 22px 0 26px; }
+    .node { padding: 15px 20px; background: white; border: 1px solid #bccde6; border-radius: 10px; text-align:center; max-width: 680px; margin: auto; }
+    .node strong { display: block; color: #183b73; font-size: 14px; }
+    .node span { display: block; color: var(--muted); font-size: 12px; }
+    .arrow { text-align: center; color: #6480b5; font-size: 25px; line-height: 1.4; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 4px 0 10px; }
+    .branch { text-align: center; }
+    .branch-label { font-size: 12px; font-weight: 800; margin: 1px 0 9px; }
+    .branch-label.fail { color: var(--red); }
+    .branch-label.pass { color: var(--teal); }
+    .node.muted { background: #fff6f7; border-color: #efbec5; }
+    .node.next { background: #f0faf7; border-color: #addace; }
+    .code-wrap { border-radius: 12px; background: #111d31; margin: 16px 0 27px; overflow: hidden; }
+    .code-head { border-bottom: 1px solid #314056; padding: 9px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; color: #b3c2da; font-size: 12px; }
+    .copy { background: #223656; color: #e9f0ff; border: 1px solid #405474; border-radius: 7px; cursor:pointer; padding: 4px 10px; font-size: 12px; }
+    pre { margin: 0; padding: 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #f1f5fc; font-family: Consolas, "Cascadia Code", "Courier New", monospace; tab-size: 4; }
+    code { font-family: Consolas, "Cascadia Code", "Courier New", monospace; font-size: .92em; }
+    p code,li code,td code { background: #edf2fa; padding: 1px 5px; border-radius: 4px; color: #224276; }
+    .grid-3 { display:grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin: 25px 0; }
+    .mini-card { border: 1px solid var(--line); border-radius: 12px; padding: 17px; background:#fff; }
+    .mini-card h3 { margin: 0 0 9px; font-size: 15px; }
+    .mini-card p { font-size: 13px; margin:0; color: var(--muted); }
+    .toc { border: 1px solid var(--line); background: #fbfcff; border-radius: 12px; padding: 21px 28px; margin: 28px 0 34px; }
+    .toc strong { color: var(--navy); }
+    .toc ol { margin-bottom: 0; display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
+    .toc a { text-decoration: none; color: var(--blue); }
+    .sources { font-size: 13px; color: var(--muted); }
+    .footer { margin-top: 50px; border-top: 1px solid var(--line); padding-top: 18px; color: var(--muted); font-size: 12px; }
+    .footnotes { font-size: 12px; color: var(--muted); }
+    @media(max-width: 800px) {
+      .page { margin: 0; border-radius: 0; }
+      .hero { padding: 42px 25px; }
+      .main { padding: 30px 22px 42px; }
+      .grid-3, .split, .toc ol { grid-template-columns: 1fr; }
+      .toolbar-inner { padding-inline: 15px; }
+      .toolbar-title { max-width: 65%; }
+      h2 { font-size: 21px; }
+    }
+    @media print {
+      @page { size: A4; margin: 15mm; }
+      body { background: white; font-size: 10pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .toolbar { display:none; }
+      .page { max-width:none; margin:0; box-shadow:none; border-radius:0; }
+      .hero { padding: 35px 37px; }
+      .hero h1 { font-size: 24pt; }
+      .main { padding: 24px 30px; }
+      h2 { font-size: 16pt; break-after: avoid; }
+      h3 { break-after: avoid; }
+      table { font-size: 9pt; min-width: 0; }
+      .table-wrap { overflow: visible; }
+      th, td { padding: 8px; }
+      .note, .summary, .flow, .mini-card, .code-wrap { break-inside: avoid; }
+      .code-wrap { break-inside: auto; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 8pt; }
+      .toc { break-inside: avoid; }
+      a { color: var(--navy); }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar" role="navigation" aria-label="レポート操作">
+    <div class="toolbar-inner">
+      <div class="toolbar-title">PDF開封可否・セキュリティ警告検知｜実現方式検討レポート</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="location.href='#toc'">目次</button>
+        <button class="btn primary" onclick="window.print()">印刷 / PDF保存</button>
+      </div>
+    </div>
+  </div>
+  <article class="page">
+    <header class="hero">
+      <span class="eyebrow">TECHNICAL FEASIBILITY REPORT</span>
+      <h1>PDF開封可否・<br>セキュリティ警告検知<br>実現方式検討レポート</h1>
+      <p>既存のPowerShell（.ps1）によるWord・PowerPoint開封検査に対し、PDFの破損・開封パスワード・セキュリティ警告を検知する機能を追加するための方式比較と実装方針。</p>
+      <div class="meta"><span>作成日：2026年11月9日</span><span>対象環境：Windows / PowerShell</span><span>検討方式：3方式</span></div>
+    </header>
+    <div class="main">
+      <div class="section-tag">EXECUTIVE SUMMARY</div>
+      <div class="summary">
+        <div class="summary-title">結論：ハイブリッド方式を推奨</div>
+        <p>PDFについても既存のOffice検査と同様に、実際にPDFビューアを起動して警告・ポップアップを検知できる。ただし、<strong>PDFの構造的な正常性</strong>と<strong>実際のビューアにおける開封結果</strong>は異なるため、qpdfによる構造・暗号化検査と、Adobe Acrobat等を使ったUI検査を組み合わせる構成が適している。</p>
+      </div>
+      <p class="lead">既存のツールは、.ps1スクリプトからWord・PowerPointを1ファイルずつ開き、アラートやポップアップの有無を監視する方式で構築されている。本レポートは、この考え方をPDFへ拡張する際の実現方式、検知範囲、サンプルコード、運用上の注意点を整理したものである。</p>
+
+      <nav class="toc" id="toc" aria-label="目次">
+        <strong>目次</strong>
+        <ol>
+          <li><a href="#comparison">実現方式の比較</a></li>
+          <li><a href="#viewer">方式① PDFビューア起動方式</a></li>
+          <li><a href="#qpdf">方式② PDF解析ツール方式</a></li>
+          <li><a href="#hybrid">方式③ ハイブリッド方式（推奨）</a></li>
+          <li><a href="#considerations">実装・運用上の注意点</a></li>
+          <li><a href="#requirements">要件確認と次のステップ</a></li>
+          <li><a href="#references">参考資料</a></li>
+        </ol>
+      </nav>
+
+      <section id="comparison">
+        <h2>1. 実現方式の比較</h2>
+        <p>PDFの検査は「ファイルそのものの解析」と「実際のPDFビューアでの動作確認」に大別できる。目的に応じて、以下の3方式から選択する。</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>方式</th><th>概要</th><th>特徴・適合性</th></tr></thead>
+          <tbody>
+            <tr><td>① PDFビューア起動方式</td><td>Adobe AcrobatなどでPDFを開き、警告・ポップアップを監視</td><td>既存のOffice検査方式に最も近い</td></tr>
+            <tr><td>② PDF解析ツール方式</td><td>qpdf等により構造上の問題、暗号化、パスワード要求を判定</td><td>GUI不要で比較的安定・高速</td></tr>
+            <tr class="emphasis-row"><td>③ ハイブリッド方式 <span class="chip ok">推奨</span></td><td>解析を先に実施し、必要なケースにビューア検査を追加</td><td>異常の分類と実利用環境での再現性を両立</td></tr>
+          </tbody>
+        </table></div>
+        <h3>検知できる内容の違い</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>検知対象</th><th>① ビューア起動</th><th>② PDF解析</th></tr></thead>
+          <tbody>
+            <tr><td>PDFファイルの破損</td><td>○</td><td>◎</td></tr>
+            <tr><td>開封パスワードの要求</td><td>◎</td><td>◎</td></tr>
+            <tr><td>暗号化・操作権限の制限</td><td>○</td><td>◎</td></tr>
+            <tr><td>Acrobat固有のセキュリティ警告</td><td>◎</td><td>×</td></tr>
+            <tr><td>保護されたビュー等の警告バー</td><td>◎</td><td>×</td></tr>
+            <tr><td>JavaScript・外部アクセス警告</td><td>◎</td><td>△（関連要素の構造解析は可能）</td></tr>
+            <tr><td>ページが実際に表示できるか</td><td>◎</td><td>△（レンダリング検査併用で○）</td></tr>
+          </tbody>
+        </table></div>
+        <p class="footnotes">※ ◎：得意、○：対応可能、△：一部対応、×：対象外。実際の検知可否は、使用ビューア、バージョン、セキュリティ設定、検知実装に依存する。</p>
+        <div class="note"><strong>重要：</strong>「PDFとして正常であること」と「利用者環境で警告なく開けること」は同義ではない。正常なPDFでもビューアの設定により警告が生じ、軽微な構造不整合があってもビューアが自動修復して表示できる場合がある。</div>
+      </section>
+
+      <section id="viewer">
+        <h2>2. 方式① Adobe Acrobatを起動して検知する</h2>
+        <p>既存のWord・PowerPoint検査コードを最大限流用したい場合に適した方式。PowerShellからAdobe Acrobat/Readerを起動し、Windows UI Automation等でダイアログや文書画面内の警告要素を調査する。</p>
+        <div class="flow" aria-label="PDFビューア起動方式の処理フロー">
+          <div class="node"><strong>PowerShell（.ps1）</strong><span>PDFのパスを指定、1ファイルずつ処理</span></div>
+          <div class="arrow">↓</div>
+          <div class="node"><strong>Adobe Acrobat / Reader 起動</strong><span>対象PDFを開く</span></div>
+          <div class="arrow">↓</div>
+          <div class="node"><strong>Windows UI Automationによる監視</strong><span>ダイアログ・警告バー・表示状態を確認</span></div>
+          <div class="arrow">↓</div>
+          <div class="split">
+            <div class="node next"><strong>正常</strong><span>警告がなく文書を表示</span></div>
+            <div class="node muted"><strong>警告あり・開封失敗</strong><span>内容を分類して記録</span></div>
+          </div>
+        </div>
+        <h3>PowerShellによる起動例</h3>
+        <div class="code-wrap">
+          <div class="code-head"><span>PowerShell｜Acrobat起動例</span><button class="copy" data-copy="code-acrobat" type="button">コピー</button></div>
+          <pre id="code-acrobat">$pdfPath = "C:\work\sample.pdf"
+$acrobat = "C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
+
+Start-Process `
+    -FilePath $acrobat `
+    -ArgumentList @(
+        "/n",
+        "/s",
+        "`"$pdfPath`""
+    )</pre>
+        </div>
+        <p>上記は起動の概念を示した例であり、<code>Acrobat.exe</code>の配置場所は製品・インストール構成によって異なる。<code>/n</code>や<code>/s</code>等のスイッチはバージョン依存・正式サポート外の扱いがあるため、対象環境で検証する必要がある。</p>
+        <h3>検知対象の例</h3>
+        <ul>
+          <li>開封パスワードの入力ダイアログ</li>
+          <li>破損・形式不正等による開封エラーダイアログ</li>
+          <li>セキュリティ警告ダイアログ、外部通信の確認</li>
+          <li>文書画面内の黄色・赤色の警告バー</li>
+          <li>文書が表示されたか、一定時間内に開封処理が完了したか</li>
+        </ul>
+        <div class="note warning"><strong>実装上の注意：</strong>警告は独立したウィンドウだけとは限らない。Acrobatのメインウィンドウ内に表示される警告バーも検査すること。また、Acrobatが既存プロセスを再利用する場合があるため、起動直後のPIDだけで対象文書を特定しない設計が望ましい。</div>
+        <p>Windows UI Automationでの検知には、原則として操作可能な対話型デスクトップセッションが必要となる。非対話型Windowsサービス、画面のない実行環境では同一手法が機能しない場合がある。</p>
+      </section>
+
+      <section id="qpdf">
+        <h2>3. 方式② qpdfでPDFを解析する</h2>
+        <p><a href="https://qpdf.readthedocs.io/" target="_blank" rel="noopener noreferrer">qpdf</a>はPDFの内部構造や暗号化状態を扱えるコマンドラインツール。PowerShellから呼び出し、終了コードや標準エラー出力を基に機械判定できる。</p>
+        <h3>① PDFの構造検査</h3>
+        <div class="code-wrap"><div class="code-head"><span>PowerShell｜構造検査</span><button class="copy" data-copy="code-check" type="button">コピー</button></div><pre id="code-check">qpdf --check "C:\work\sample.pdf"</pre></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>終了コード</th><th>判定</th></tr></thead>
+          <tbody><tr><td><code>0</code></td><td>構造上の問題が検出されなかった</td></tr><tr><td><code>2</code></td><td>エラーが検出された</td></tr><tr><td><code>3</code></td><td>警告が検出された（修復可能な問題など）</td></tr></tbody>
+        </table></div>
+        <h3>② 開封パスワード要求の確認</h3>
+        <div class="code-wrap"><div class="code-head"><span>PowerShell｜パスワード判定</span><button class="copy" data-copy="code-pass" type="button">コピー</button></div><pre id="code-pass">qpdf --requires-password "C:\work\sample.pdf"</pre></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>終了コード</th><th>扱い方の目安</th></tr></thead>
+          <tbody><tr><td><code>0</code></td><td>開封にパスワードが必要</td></tr><tr><td><code>2</code></td><td>パスワードなしで開ける状態（暗号化の有無は別途確認）</td></tr><tr><td><code>3</code></td><td>指定されたパスワードで開ける暗号化PDF等（qpdfのバージョン・条件に応じて確認）</td></tr></tbody>
+        </table></div>
+        <p class="footnotes">※ 終了コードはqpdfのバージョン・オプション・エラーの種類に依存するため、導入時に採用バージョンの公式マニュアルとテストファイルで照合する。<code>--requires-password</code>単独では破損判定や権限制限の網羅的判定はできない。</p>
+        <h3>PowerShell実装例（簡易サンプル）</h3>
+        <p>qpdfがインストールされ、PATHから実行できることを前提に、パスワード要求と構造検査を組み合わせた例を示す。</p>
+        <div class="code-wrap"><div class="code-head"><span>PowerShell｜Test-PdfFile</span><button class="copy" data-copy="code-function" type="button">コピー</button></div><pre id="code-function">function Test-PdfFile {
+    param(
+        [Parameter(Mandatory)]
+        [string]$PdfPath
+    )
+
+    $pdf = (Resolve-Path -LiteralPath $PdfPath -ErrorAction Stop).ProviderPath
+
+    # 開封パスワード要求の確認
+    $null = &amp; qpdf --requires-password $pdf 2&gt;&amp;1
+    $passwordCode = $LASTEXITCODE
+
+    if ($passwordCode -eq 0) {
+        return [PSCustomObject]@{
+            File   = $pdf
+            Status = "PASSWORD_REQUIRED"
+            Detail = "構造検査は未実施"
+        }
+    }
+
+    if ($passwordCode -notin @(2, 3)) {
+        return [PSCustomObject]@{
+            File   = $pdf
+            Status = "UNKNOWN"
+            Detail = "パスワード検査で想定外の終了コード"
+        }
+    }
+
+    # PDF構造の検査
+    $log = (&amp; qpdf --check $pdf 2&gt;&amp;1 | Out-String)
+    $code = $LASTEXITCODE
+
+    $status = switch ($code) {
+        0 { "OK" }
+        2 { "ERROR" }
+        3 { "WARNING" }
+        default { "UNKNOWN" }
+    }
+
+    return [PSCustomObject]@{
+        File                 = $pdf
+        Status               = $status
+        PasswordCheckCode    = $passwordCode
+        Detail               = $log.Trim()
+    }
+}
+
+Test-PdfFile -PdfPath "C:\work\sample.pdf"</pre></div>
+        <div class="note"><strong>判定範囲の限界：</strong><code>qpdf --check</code>は主にPDF構造を検査するものであり、全ページが正しく描画されることまで保証しない。必要に応じて<a href="https://mupdf.readthedocs.io/" target="_blank" rel="noopener noreferrer">MuPDF / mutool</a>の全ページレンダリング検査を追加する。</div>
+      </section>
+
+      <section id="hybrid">
+        <h2>4. 方式③ ハイブリッド方式（推奨）</h2>
+        <p>既存のOfficeファイル検査に近い判定体系を保ちながら、PDF固有の暗号化・構造異常を精密に分類する構成である。解析で明確な異常を特定できたケースは、その時点で結果を記録し、必要なケースのみビューアで実検査する。</p>
+        <div class="flow" aria-label="ハイブリッド方式の処理フロー">
+          <div class="node"><strong>検査対象：sample.pdf</strong><span>ファイル存在確認、拡張子・検査IDの付与</span></div>
+          <div class="arrow">↓</div>
+          <div class="node"><strong>Step 1：qpdfによる事前検査</strong><span>破損・パスワード要求・暗号化状態を確認</span></div>
+          <div class="arrow">↓</div>
+          <div class="split">
+            <div class="branch"><div class="branch-label fail">異常・要確認</div><div class="node muted"><strong>結果を記録</strong><span>ERROR / WARNING / PASSWORD_REQUIRED</span></div></div>
+            <div class="branch"><div class="branch-label pass">構造検査OK</div><div class="node next"><strong>Step 2：Acrobat起動</strong><span>警告・ダイアログ・文書表示を監視</span></div></div>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="node"><strong>Step 3：結果を統合・出力</strong><span>CSV / JSON / 既存の検査結果フォーマット</span></div>
+        </div>
+        <h3>出力結果の例</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>ファイル</th><th>構造検査</th><th>開封パスワード</th><th>Acrobat警告</th><th>最終判定</th></tr></thead>
+          <tbody>
+            <tr><td>A.pdf</td><td><span class="chip ok">OK</span></td><td>不要</td><td>なし</td><td><span class="chip ok">正常</span></td></tr>
+            <tr><td>B.pdf</td><td><span class="chip bad">ERROR</span></td><td>不要</td><td>未実施</td><td><span class="chip bad">破損疑い</span></td></tr>
+            <tr><td>C.pdf</td><td><span class="chip na">未実施</span></td><td>必要</td><td>未実施</td><td><span class="chip warn">開封制限</span></td></tr>
+            <tr><td>D.pdf</td><td><span class="chip ok">OK</span></td><td>不要</td><td>あり</td><td><span class="chip warn">要確認</span></td></tr>
+          </tbody>
+        </table></div>
+        <p>運用上は、最終判定とは別に、<code>ParserStatus</code>、<code>PasswordStatus</code>、<code>ViewerStatus</code>、<code>WarningType</code>、<code>LogPath</code>を保持すると、原因調査や再検査が容易になる。</p>
+      </section>
+
+      <section id="considerations">
+        <h2>5. 実装・運用上の注意点</h2>
+        <div class="grid-3">
+          <div class="mini-card"><h3>検査の信頼性</h3><p>起動タイムアウト、ウィンドウ監視、終了処理、再試行、ログ保存を設計する。</p></div>
+          <div class="mini-card"><h3>セキュリティ</h3><p>外部由来PDFは隔離環境で扱い、ビューアの保護機能を無効化しない。</p></div>
+          <div class="mini-card"><h3>判定の透明性</h3><p>検査不能・タイムアウトは正常扱いにせず、UNKNOWNとして記録する。</p></div>
+        </div>
+        <h3>セキュリティ設定の分類</h3>
+        <ul>
+          <li><strong>開封パスワード：</strong>文書を読むためのパスワード。開封を妨げるため、異常または要対応として扱いやすい。</li>
+          <li><strong>権限制限：</strong>印刷・編集・コピーなどを制限する設定。閲覧自体はできる場合があるため、開封失敗と同一視しない。</li>
+          <li><strong>証明書保護・組織ポリシー：</strong>証明書、保護設定、ビューア環境等によって開封や操作の可否が変わる場合がある。</li>
+          <li><strong>ビューア固有の警告：</strong>信頼済み設定、保護されたビュー、JavaScript・外部アクセス設定など、実行環境の影響を受ける。</li>
+        </ul>
+        <h3>既存.ps1に組み込む際のチェックポイント</h3>
+        <ol>
+          <li>検査端末のAcrobat/Reader製品名、バージョン、実行ファイルパスを固定・記録する。</li>
+          <li>対話型セッションを確保し、検査ファイルごとに前回の表示状態が残らないよう制御する。</li>
+          <li>同じ異常でも、PDF構造異常か、ビューア・環境依存の異常かを区別して出力する。</li>
+          <li>1ファイルあたりのタイムアウトと、異常終了時のプロセス・ウィンドウ後始末を定義する。</li>
+          <li>パスワード付きPDF、部分破損PDF、警告バーが出るPDF、正常PDFを含むテストセットで検証する。</li>
+        </ol>
+        <div class="note danger"><strong>留意：</strong>PDFの自動開封は、JavaScript、外部リンク、埋め込みコンテンツ等に起因するリスクを伴う。信頼できないファイルは隔離された検査VM等で開封し、ネットワーク・権限を最小化すること。</div>
+      </section>
+
+      <section id="requirements">
+        <h2>6. 要件確認と次のステップ</h2>
+        <p>最適な検査構成を確定するため、まず既存ツールでの「異常」の定義を明確にする。</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>検査要件の候補</th><th>推奨実装</th></tr></thead>
+          <tbody>
+            <tr><td>開けないPDFのみを異常とする</td><td>qpdfによる事前検査＋必要時の表示確認。UI監視は限定的に利用。</td></tr>
+            <tr><td>開けても警告・ポップアップが出たら異常とする</td><td>qpdf＋AcrobatのUI Automation監視を組み合わせる。</td></tr>
+            <tr><td>特定の警告だけを異常とする</td><td>対象警告の文言・UI要素・バージョン差を整理してルール化する。</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>次の検討事項：</strong>検査対象のPDFビューア（Acrobat / Reader / Edge等）、PowerShellの実行形態（ログオンセッション / タスクスケジューラ / サービス）、想定ファイル数、異常判定ルール、既存ログの形式を確認した上で、.ps1の詳細設計に進む。</p>
+      </section>
+
+      <section id="references">
+        <h2>7. 参考資料</h2>
+        <div class="sources">
+          <ul>
+            <li>qpdf公式マニュアル：<a href="https://qpdf.readthedocs.io/" target="_blank" rel="noopener noreferrer">https://qpdf.readthedocs.io/</a></li>
+            <li>MuPDF公式ドキュメント：<a href="https://mupdf.readthedocs.io/" target="_blank" rel="noopener noreferrer">https://mupdf.readthedocs.io/</a></li>
+            <li>Microsoft UI Automation概要：<a href="https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-overview" target="_blank" rel="noopener noreferrer">Microsoft Learn – UI Automation Overview</a></li>
+            <li>Adobe Acrobat Developer Center：<a href="https://developer.adobe.com/acrobat/" target="_blank" rel="noopener noreferrer">https://developer.adobe.com/acrobat/</a></li>
+          </ul>
+        </div>
+        <p class="footnotes">本レポートは提示済みの技術検討内容をHTML化したものであり、コードは実装例である。製品仕様とコマンドの挙動は利用バージョン・設定により異なるため、本番導入前の動作検証が必要。</p>
+      </section>
+      <footer class="footer">PDF開封可否・セキュリティ警告検知｜実現方式検討レポート　—　HTML単体ファイル／オフライン閲覧可能</footer>
+    </div>
+  </article>
+  <script>
+    (function () {
+      document.querySelectorAll('[data-copy]').forEach(function (button) {
+        button.addEventListener('click', async function () {
+          var target = document.getElementById(button.getAttribute('data-copy'));
+          if (!target) return;
+          var value = target.textContent;
+          try {
+            if (navigator.clipboard && window.isSecureContext) {
+              await navigator.clipboard.writeText(value);
+            } else {
+              var textarea = document.createElement('textarea');
+              textarea.value = value;
+              textarea.style.position = 'fixed';
+              textarea.style.opacity = '0';
+              document.body.appendChild(textarea);
+              textarea.select();
+              if (!document.execCommand('copy')) throw new Error('copy failed');
+              textarea.remove();
+            }
+            var original = button.textContent;
+            button.textContent = 'コピーしました';
+            window.setTimeout(function () { button.textContent = original; }, 1600);
+          } catch (e) {
+            button.textContent = 'コピーできませんでした';
+            window.setTimeout(function () { button.textContent = 'コピー'; }, 2000);
+          }
+        });
+      });
+    }());
+  </script>
+</body>
+</html>
